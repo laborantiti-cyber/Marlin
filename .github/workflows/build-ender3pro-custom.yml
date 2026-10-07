@@ -35,17 +35,11 @@ jobs:
               s = s.replace(old, new, 1)
               print("OK:", label)
 
-          # Trianglelab / BMG-style extruder = 415 steps/mm in this TinyMachines source.
-          one(
-              " //#define BondtechBMG",
-              " #define BondtechBMG",
-              "E steps = 415"
-          )
+          one(" //#define BondtechBMG", " #define BondtechBMG", "E steps = 415")
 
-          # BIQU HT-NTC100K / 100K B3950 high-temp thermistor = Marlin table 61.
           s, n = re.subn(
-              r'(#elif ENABLED\(HotendStock\)\s*\n\s*)#define TEMP_SENSOR_0 1',
-              r'\1#define TEMP_SENSOR_0 61',
+              r'(#elif ENABLED\\(HotendStock\\)\\s*\\n\\s*)#define TEMP_SENSOR_0 1',
+              r'\\1#define TEMP_SENSOR_0 61',
               s,
               count=1
           )
@@ -53,21 +47,18 @@ jobs:
               raise SystemExit(f"TEMP_SENSOR_0: expected 1 match, found {n}")
           print("OK: TEMP_SENSOR_0 = 61")
 
-          # Custom BLTouch position on this printhead.
           one(
               "#define NOZZLE_TO_PROBE_OFFSET { -41, -8, 0 }",
               "#define NOZZLE_TO_PROBE_OFFSET { -29, -27, -8.90 }",
               "BLTouch offsets X-29 Y-27 Z-8.90"
           )
 
-          # Permit further Z-offset tuning if required.
           one(
               "#define Z_PROBE_OFFSET_RANGE_MIN -9",
               "#define Z_PROBE_OFFSET_RANGE_MIN -15",
               "Z probe offset minimum = -15"
           )
 
-          # Physical marked center used for safe Z homing.
           one(
               "#define Z_SAFE_HOMING_X_POINT (X_BED_SIZE / 2)  // X point for Z homing",
               "#define Z_SAFE_HOMING_X_POINT 110  // measured physical bed center (probe)",
@@ -79,19 +70,16 @@ jobs:
               "Safe home Y = 129"
           )
 
-          # Ender 3 / Ender 3 Pro maximum Z height.
-          old = """  #elif ANY(MachineEnder3, MachineEnder3V2)
-            #define X_BED_SIZE 230
-            #define Y_BED_SIZE 230
-            #define Z_MAX_POS 250"""
-          new = """  #elif ANY(MachineEnder3, MachineEnder3V2)
-            #define X_BED_SIZE 230
-            #define Y_BED_SIZE 230
-            #define Z_MAX_POS 235"""
-          # Normalize the eight extra spaces above to match the source indentation.
-          old = old.replace("            #", "    #")
-          new = new.replace("            #", "    #")
-          one(old, new, "Z max = 235")
+          pattern = (
+              r'(#elif ANY\\(MachineEnder3, MachineEnder3V2\\)\\s*\\n'
+              r'\\s*#define X_BED_SIZE 230\\s*\\n'
+              r'\\s*#define Y_BED_SIZE 230\\s*\\n'
+              r'\\s*#define Z_MAX_POS )250'
+          )
+          s, n = re.subn(pattern, r'\\g<1>235', s, count=1)
+          if n != 1:
+              raise SystemExit(f"Z max = 235: expected 1 match, found {n}")
+          print("OK: Z max = 235")
 
           required = [
               "#define BondtechBMG",
@@ -109,10 +97,6 @@ jobs:
           p.write_text(s, encoding="utf-8")
           print("All requested settings verified.")
 
-      - name: Show key settings
-        run: |
-          grep -nE "BondtechBMG|EStepsmm 415|TEMP_SENSOR_0 61|NOZZLE_TO_PROBE_OFFSET|Z_PROBE_OFFSET_RANGE_MIN|Z_SAFE_HOMING_[XY]_POINT|Z_MAX_POS 235" Marlin/Configuration.h
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -129,7 +113,6 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p artifact
-          find .pio/build/Ender3_422_BLT -maxdepth 1 -type f -name "*.bin" -print
           cp .pio/build/Ender3_422_BLT/*.bin artifact/
           cp Marlin/Configuration.h artifact/Configuration.h
           ls -lah artifact
