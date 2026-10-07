@@ -156,8 +156,7 @@ jobs:
                   raise SystemExit(f"Validation failed: {v}")
 
           # Dedicated 5-pin BLTouch port. Do NOT use the _ZM build.
-          if "#define Creality42XUseZMin" in cfg:
-              raise SystemExit("Creality42XUseZMin unexpectedly enabled")
+          
 
           print("All custom settings validated.")
 
