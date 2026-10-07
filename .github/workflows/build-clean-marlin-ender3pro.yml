@@ -1,0 +1,105 @@
+name: Build Clean Marlin Ender3 Pro 4.2.2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio
+
+      - name: Download official Marlin 2.1.2.8
+        run: |
+          git clone --depth 1 --branch 2.1.2.8 https://github.com/MarlinFirmware/Marlin.git marlin
+          git clone --depth 1 --branch release-2.1.2.8 https://github.com/MarlinFirmware/Configurations.git configs
+
+      - name: Install official Ender-3 Pro V4.2.2 configuration
+        run: |
+          cp "configs/config/examples/Creality/Ender-3 Pro/CrealityV422/Configuration.h" marlin/Marlin/Configuration.h
+          cp "configs/config/examples/Creality/Ender-3 Pro/CrealityV422/Configuration_adv.h" marlin/Marlin/Configuration_adv.h
+
+      - name: Apply custom printer settings
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          import re
+
+          cfg_path = Path("marlin/Marlin/Configuration.h")
+          adv_path = Path("marlin/Marlin/Configuration_adv.h")
+          cfg = cfg_path.read_text(encoding="utf-8")
+          adv = adv_path.read_text(encoding="utf-8")
+
+          def sub1(text, pattern, repl, name):
+              text2, n = re.subn(pattern, repl, text, count=1, flags=re.M)
+              if n != 1:
+                  raise SystemExit(f"{name}: expected 1 replacement, got {n}")
+              return text2
+
+          cfg = sub1(cfg, r'^#define CUSTOM_MACHINE_NAME .+$',
+                     '#define CUSTOM_MACHINE_NAME "Ender-3 Pro 4.2.2 CUSTOM"', 'machine name')
+          cfg = sub1(cfg, r'^#define TEMP_SENSOR_0\s+1\s*$',
+                     '#define TEMP_SENSOR_0 61', 'hotend thermistor')
+          cfg = sub1(cfg, r'^#define HEATER_0_MAXTEMP\s+275\s*$',
+                     '#define HEATER_0_MAXTEMP 315', 'hotend max temp')
+          cfg = sub1(cfg, r'^#define DEFAULT_AXIS_STEPS_PER_UNIT\s+\{\s*80,\s*80,\s*400,\s*93\s*\}\s*$',
+                     '#define DEFAULT_AXIS_STEPS_PER_UNIT   { 80, 80, 400, 415 }', 'steps/mm')
+          cfg = sub1(cfg, r'^#define Z_MAX_POS\s+250\s*$',
+                     '#define Z_MAX_POS 235', 'Z max')
+          cfg = sub1(cfg, r'^//#define USE_PROBE_FOR_Z_HOMING\s*$',
+                     '#define USE_PROBE_FOR_Z_HOMING', 'probe Z homing')
+          cfg = sub1(cfg, r'^//#define BLTOUCH\s*$',
+                     '#define BLTOUCH', 'BLTouch')
+          cfg = sub1(cfg, r'^#define NOZZLE_TO_PROBE_OFFSET\s+\{[^\n]+\}\s*(?://.*)?$',
+                     '#define NOZZLE_TO_PROBE_OFFSET { -29, -27, -8.90 }', 'probe offset')
+          cfg = sub1(cfg, r'^//#define AUTO_BED_LEVELING_BILINEAR\s*$',
+                     '#define AUTO_BED_LEVELING_BILINEAR', 'bilinear ABL')
+          cfg = sub1(cfg, r'^//#define Z_SAFE_HOMING\s*$',
+                     '#define Z_SAFE_HOMING', 'safe homing')
+          cfg = sub1(cfg, r'^\s*#define Z_SAFE_HOMING_X_POINT X_CENTER.*$',
+                     '  #define Z_SAFE_HOMING_X_POINT 110', 'safe home X')
+          cfg = sub1(cfg, r'^\s*#define Z_SAFE_HOMING_Y_POINT Y_CENTER.*$',
+                     '  #define Z_SAFE_HOMING_Y_POINT 129', 'safe home Y')
+          cfg = sub1(cfg, r'^\s*#define GRID_MAX_POINTS_X 3\s*$',
+                     '  #define GRID_MAX_POINTS_X 5', 'mesh grid')
+          cfg = sub1(cfg, r'^//#define Z_MIN_PROBE_REPEATABILITY_TEST\s*$',
+                     '#define Z_MIN_PROBE_REPEATABILITY_TEST', 'M48')
+
+          adv = sub1(adv, r'^\s*//#define PROBE_OFFSET_WIZARD\s+.*$',
+                     '  #define PROBE_OFFSET_WIZARD', 'probe offset wizard')
+          adv = sub1(adv, r'^\s*//#define BABYSTEP_ZPROBE_OFFSET\s+.*$',
+                     '  #define BABYSTEP_ZPROBE_OFFSET', 'babystep Z offset')
+
+          # The BLTouch signal is on the dedicated 5-pin probe connector.
+          if re.search(r'^\s*#define Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN', cfg, re.M):
+              raise SystemExit('Z_MIN_PROBE_USES_Z_MIN_ENDSTOP_PIN must stay disabled')
+
+          cfg_path.write_text(cfg, encoding="utf-8")
+          adv_path.write_text(adv, encoding="utf-8")
+          PY
+
+      - name: Build firmware
+        working-directory: marlin
+        run: pio run -e STM32F103RE_creality
+
+      - name: Collect firmware
+        run: |
+          BIN=$(find marlin/.pio/build/STM32F103RE_creality -maxdepth 1 -type f -name '*.bin' | head -n 1)
+          test -n "$BIN"
+          cp "$BIN" Ender3Pro_422_BLTouch_BIQU_B3950_E415_Z235.bin
+          sha256sum Ender3Pro_422_BLTouch_BIQU_B3950_E415_Z235.bin
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ender3Pro_422_BLTouch_BIQU_B3950_E415_Z235
+          path: Ender3Pro_422_BLTouch_BIQU_B3950_E415_Z235.bin
+          if-no-files-found: error
+          retention-days: 30
