@@ -1,0 +1,201 @@
+name: Build Ender3 Pro 4.2.2 TinyMachines V6 ZERO OFFSET
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-ender3pro-tinymachines-v6-zero-offset.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout TinyMachines / InsanityAutomation source
+        uses: actions/checkout@v4
+        with:
+          repository: InsanityAutomation/Marlin
+          ref: CrealityDwin_2.0
+          fetch-depth: 1
+
+      - name: Apply Ender 3 Pro custom configuration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          cfgp = Path("Marlin/Configuration.h")
+          advp = Path("Marlin/Configuration_adv.h")
+          tnp = Path("Marlin/src/lcd/thermistornames.h")
+
+          cfg = cfgp.read_text(encoding="utf-8")
+          adv = advp.read_text(encoding="utf-8")
+          tn = tnp.read_text(encoding="utf-8")
+
+          def rep(text, old, new, label):
+              n = text.count(old)
+              if n != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {n}")
+              print(f"OK: {label}")
+              return text.replace(old, new, 1)
+
+          # Trianglelab / Bondtech BMG style extruder -> TinyMachines gives E415
+          cfg = rep(cfg,
+              " //#define BondtechBMG",
+              " #define BondtechBMG",
+              "Bondtech BMG / E415")
+
+          # BIQU HT-NTC100K: 100k @25C, Beta 3950, Creality 4.7k pull-up.
+          # Use Marlin custom thermistor instead of table 61 so the LCD no longer
+          # identifies it as 'Formbot 350C'.
+          cfg = rep(cfg,
+              "//#define ConfigurableThermistors",
+              "#define ConfigurableThermistors",
+              "Enable custom BIQU thermistor")
+
+          # Custom thermistor defaults required by TEMP_SENSOR_0 = 1000.
+          adv = rep(adv,
+              "#pragma once",
+              "#pragma once\n\n// BIQU HT-NTC100K B3950\n#define HOTEND0_PULLUP_RESISTOR_OHMS 4700.0\n#define HOTEND0_RESISTANCE_25C_OHMS 100000.0\n#define HOTEND0_BETA 3950.0",
+              "BIQU thermistor parameters")
+
+          # Friendly LCD name for thermistor 1000.
+          tn = rep(tn,
+              '#define THERMISTOR_NAME "User Parameters"',
+              '#define THERMISTOR_NAME "BIQU 100K B3950"',
+              "BIQU thermistor LCD name")
+
+          # Measured XY offsets, but DEFAULT Z offset is deliberately ZERO.
+          # The LCD Probe Offset Wizard will start from Z offset 0.0 and let us
+          # calibrate the real Z offset from scratch.
+          cfg = rep(cfg,
+              "#define NOZZLE_TO_PROBE_OFFSET { -41, -8, 0 }",
+              "#define NOZZLE_TO_PROBE_OFFSET { -29, -27, 0.0 }",
+              "BLTouch X-29 Y-27 Z0.0")
+
+          # Wider adjustment range for calibration.
+          cfg = rep(cfg,
+              "#define Z_PROBE_OFFSET_RANGE_MIN -9",
+              "#define Z_PROBE_OFFSET_RANGE_MIN -15",
+              "Z offset minimum -15")
+
+          # Do not force the carriage to Z=5 after probe homing.
+          cfg = rep(cfg,
+              "  #define Z_AFTER_PROBING           5 // Z position after probing is done",
+              "  //#define Z_AFTER_PROBING           5 // disabled in V6",
+              "Disable Z_AFTER_PROBING")
+
+          # Safe Z homing point for the measured probe position.
+          cfg = rep(cfg,
+              "#define Z_SAFE_HOMING_X_POINT (X_BED_SIZE / 2)  // X point for Z homing",
+              "#define Z_SAFE_HOMING_X_POINT 110  // measured probe safe-home point",
+              "Safe home X 110")
+          cfg = rep(cfg,
+              "#define Z_SAFE_HOMING_Y_POINT (Y_BED_SIZE / 2)  // Y point for Z homing",
+              "#define Z_SAFE_HOMING_Y_POINT 129  // measured probe safe-home point",
+              "Safe home Y 129")
+
+          # Z travel.
+          cfg = rep(cfg,
+              "  #elif ANY(MachineEnder3, MachineEnder3V2)\n    #define X_BED_SIZE 230\n    #define Y_BED_SIZE 230\n    #define Z_MAX_POS 250",
+              "  #elif ANY(MachineEnder3, MachineEnder3V2)\n    #define X_BED_SIZE 230\n    #define Y_BED_SIZE 230\n    #define Z_MAX_POS 235",
+              "Z max 235")
+
+          # Keep TinyMachines / Creality normal EEPROM implementation.
+          # Do NOT enable FLASH_EEPROM_EMULATION.
+
+          # Always show M500/M501 feedback.
+          cfg = rep(cfg,
+              "#if DISABLED(LowMemoryBoard)\n  #define EEPROM_CHITCHAT       // Give feedback on EEPROM commands. Disable to save PROGMEM.\n#endif",
+              "#define EEPROM_CHITCHAT       // Give feedback on M500/M501",
+              "EEPROM chitchat")
+
+          # M48 repeatability test.
+          cfg = rep(cfg,
+              "  //#define Z_MIN_PROBE_REPEATABILITY_TEST",
+              "  #define Z_MIN_PROBE_REPEATABILITY_TEST",
+              "M48 probe repeatability")
+
+          # LCD Z-offset wizard. IMPORTANT: start Z offset = 0.0.
+          # Entering the wizard sets probe.offset.z to 0.0 BEFORE G28, so the
+          # home sequence finishes with the coordinate Z=0 and calibration then
+          # starts from that zero reference.
+          adv = rep(adv,
+              "  //#define PROBE_OFFSET_WIZARD       // Add a Probe Z Offset calibration option to the LCD menu",
+              "  #define PROBE_OFFSET_WIZARD       // Add a Probe Z Offset calibration option to the LCD menu",
+              "Probe Offset Wizard")
+          adv = rep(adv,
+              "    //#define PROBE_OFFSET_WIZARD_START_Z -4.0",
+              "    #define PROBE_OFFSET_WIZARD_START_Z 0.0",
+              "Probe Offset Wizard starts at Z0")
+
+          cfgp.write_text(cfg, encoding="utf-8")
+          advp.write_text(adv, encoding="utf-8")
+          tnp.write_text(tn, encoding="utf-8")
+
+          required_cfg = [
+              "#define BondtechBMG",
+              "#define ConfigurableThermistors",
+              "#define NOZZLE_TO_PROBE_OFFSET { -29, -27, 0.0 }",
+              "#define Z_PROBE_OFFSET_RANGE_MIN -15",
+              "//#define Z_AFTER_PROBING           5 // disabled in V6",
+              "#define Z_SAFE_HOMING_X_POINT 110",
+              "#define Z_SAFE_HOMING_Y_POINT 129",
+              "#define Z_MAX_POS 235",
+              "#define EEPROM_SETTINGS",
+              "#define EEPROM_CHITCHAT",
+              "#define Z_MIN_PROBE_REPEATABILITY_TEST",
+              "#define RESTORE_LEVELING_AFTER_G28",
+          ]
+          required_adv = [
+              "#define HOTEND0_PULLUP_RESISTOR_OHMS 4700.0",
+              "#define HOTEND0_RESISTANCE_25C_OHMS 100000.0",
+              "#define HOTEND0_BETA 3950.0",
+              "#define PROBE_OFFSET_WIZARD",
+              "#define PROBE_OFFSET_WIZARD_START_Z 0.0",
+              "#define BABYSTEP_ZPROBE_OFFSET",
+          ]
+          for v in required_cfg:
+              if v not in cfg:
+                  raise SystemExit(f"Validation failed: {v}")
+          for v in required_adv:
+              if v not in adv:
+                  raise SystemExit(f"Validation failed: {v}")
+          if '#define THERMISTOR_NAME "BIQU 100K B3950"' not in tn:
+              raise SystemExit("Validation failed: BIQU thermistor name")
+          if "#define FLASH_EEPROM_EMULATION" in cfg:
+              raise SystemExit("FLASH_EEPROM_EMULATION must stay disabled")
+
+          print("All V6 ZERO OFFSET settings validated.")
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Compile Ender3_422_BLT
+        run: platformio run -e Ender3_422_BLT
+
+      - name: Collect firmware
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p artifact
+          BIN="$(find .pio/build/Ender3_422_BLT -maxdepth 1 -type f -name '*.bin' | head -n 1)"
+          test -n "$BIN"
+          cp "$BIN" artifact/Ender3Pro_422_TinyMachines_V6_ZERO_OFFSET_BIQU_B3950_E415_Z235.bin
+          cp Marlin/Configuration.h artifact/Configuration.h
+          cp Marlin/Configuration_adv.h artifact/Configuration_adv.h
+          cp Marlin/src/lcd/thermistornames.h artifact/thermistornames.h
+          sha256sum artifact/*.bin | tee artifact/SHA256.txt
+          ls -lah artifact
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ender3Pro_422_TinyMachines_V6_ZERO_OFFSET
+          path: artifact/*
+          if-no-files-found: error
+          retention-days: 30
