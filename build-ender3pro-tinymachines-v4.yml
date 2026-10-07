@@ -1,0 +1,194 @@
+name: Build Ender3 Pro 4.2.2 TinyMachines FLASH EEPROM
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-ender3pro-tinymachines-v4.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout TinyMachines / InsanityAutomation source
+        uses: actions/checkout@v4
+        with:
+          repository: InsanityAutomation/Marlin
+          ref: CrealityDwin_2.0
+          fetch-depth: 1
+
+      - name: Apply Ender 3 Pro custom configuration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          cfgp = Path("Marlin/Configuration.h")
+          advp = Path("Marlin/Configuration_adv.h")
+          cfg = cfgp.read_text(encoding="utf-8")
+          adv = advp.read_text(encoding="utf-8")
+
+          def rep_cfg(old, new, label):
+              global cfg
+              n = cfg.count(old)
+              if n != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {n}")
+              cfg = cfg.replace(old, new, 1)
+              print(f"OK: {label}")
+
+          def rep_adv(old, new, label):
+              global adv
+              n = adv.count(old)
+              if n != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {n}")
+              adv = adv.replace(old, new, 1)
+              print(f"OK: {label}")
+
+          # Trianglelab / Bondtech BMG style extruder
+          rep_cfg(
+              " //#define BondtechBMG",
+              " #define BondtechBMG",
+              "Bondtech BMG / E415"
+          )
+
+          # BIQU HT-NTC100K B3950 thermistor
+          rep_cfg(
+              "#elif ENABLED(HotendStock)\n  #define TEMP_SENSOR_0 1\n#endif",
+              "#elif ENABLED(HotendStock)\n  #define TEMP_SENSOR_0 61\n#endif",
+              "TEMP_SENSOR_0 = 61"
+          )
+
+          # Measured BLTouch offsets
+          rep_cfg(
+              "#define NOZZLE_TO_PROBE_OFFSET { -41, -8, 0 }",
+              "#define NOZZLE_TO_PROBE_OFFSET { -29, -27, -8.90 }",
+              "BLTouch X-29 Y-27 Z-8.90"
+          )
+
+          # Wider Z offset adjustment range
+          rep_cfg(
+              "#define Z_PROBE_OFFSET_RANGE_MIN -9",
+              "#define Z_PROBE_OFFSET_RANGE_MIN -15",
+              "Z offset minimum -15"
+          )
+
+          # Safe Z homing point for this mount
+          rep_cfg(
+              "#define Z_SAFE_HOMING_X_POINT (X_BED_SIZE / 2)  // X point for Z homing",
+              "#define Z_SAFE_HOMING_X_POINT 110  // measured probe safe-home point",
+              "Safe home X 110"
+          )
+          rep_cfg(
+              "#define Z_SAFE_HOMING_Y_POINT (Y_BED_SIZE / 2)  // Y point for Z homing",
+              "#define Z_SAFE_HOMING_Y_POINT 129  // measured probe safe-home point",
+              "Safe home Y 129"
+          )
+
+          # Z travel
+          rep_cfg(
+              "  #elif ANY(MachineEnder3, MachineEnder3V2)\n    #define X_BED_SIZE 230\n    #define Y_BED_SIZE 230\n    #define Z_MAX_POS 250",
+              "  #elif ANY(MachineEnder3, MachineEnder3V2)\n    #define X_BED_SIZE 230\n    #define Y_BED_SIZE 230\n    #define Z_MAX_POS 235",
+              "Z max 235"
+          )
+
+          # Store EEPROM in the STM32 internal flash instead of the external BL24Cxx.
+          # This makes M500/M501 independent of the SD card and avoids relying on
+          # an external EEPROM chip being present/working on this particular 4.2.2 board.
+          rep_cfg(
+              "#define EEPROM_SETTINGS     // Persistent storage with M500 and M501",
+              "#define FLASH_EEPROM_EMULATION\n#define EEPROM_SETTINGS     // Persistent storage with M500 and M501",
+              "FLASH EEPROM emulation"
+          )
+
+          # Always show save/load feedback from EEPROM commands.
+          rep_cfg(
+              "#if DISABLED(LowMemoryBoard)\n  #define EEPROM_CHITCHAT       // Give feedback on EEPROM commands. Disable to save PROGMEM.\n#endif",
+              "#define EEPROM_CHITCHAT       // Give feedback on M500/M501",
+              "EEPROM chitchat"
+          )
+
+          # Probe repeatability test (M48)
+          rep_cfg(
+              "  //#define Z_MIN_PROBE_REPEATABILITY_TEST",
+              "  #define Z_MIN_PROBE_REPEATABILITY_TEST",
+              "M48 probe repeatability"
+          )
+
+          # Convenient Z-offset calibration from the stock Marlin LCD menus.
+          rep_adv(
+              "  //#define PROBE_OFFSET_WIZARD       // Add a Probe Z Offset calibration option to the LCD menu",
+              "  #define PROBE_OFFSET_WIZARD       // Add a Probe Z Offset calibration option to the LCD menu",
+              "Probe Offset Wizard"
+          )
+          rep_adv(
+              "    //#define PROBE_OFFSET_WIZARD_START_Z -4.0",
+              "    #define PROBE_OFFSET_WIZARD_START_Z -8.0",
+              "Probe Offset Wizard safe start"
+          )
+
+          cfgp.write_text(cfg, encoding="utf-8")
+          advp.write_text(adv, encoding="utf-8")
+
+          required_cfg = [
+              "#define BondtechBMG",
+              "#define TEMP_SENSOR_0 61",
+              "#define NOZZLE_TO_PROBE_OFFSET { -29, -27, -8.90 }",
+              "#define Z_PROBE_OFFSET_RANGE_MIN -15",
+              "#define Z_SAFE_HOMING_X_POINT 110",
+              "#define Z_SAFE_HOMING_Y_POINT 129",
+              "#define Z_MAX_POS 235",
+              "#define FLASH_EEPROM_EMULATION",
+              "#define EEPROM_SETTINGS",
+              "#define EEPROM_CHITCHAT",
+              "#define Z_MIN_PROBE_REPEATABILITY_TEST",
+              "#define RESTORE_LEVELING_AFTER_G28",
+          ]
+          required_adv = [
+              "#define PROBE_OFFSET_WIZARD",
+              "#define PROBE_OFFSET_WIZARD_START_Z -8.0",
+              "#define BABYSTEP_ZPROBE_OFFSET",
+          ]
+          for v in required_cfg:
+              if v not in cfg:
+                  raise SystemExit(f"Validation failed: {v}")
+          for v in required_adv:
+              if v not in adv:
+                  raise SystemExit(f"Validation failed: {v}")
+
+          # Dedicated 5-pin BLTouch port. Do NOT use the _ZM build.
+          if "#define Creality42XUseZMin" in cfg:
+              raise SystemExit("Creality42XUseZMin unexpectedly enabled")
+
+          print("All custom settings validated.")
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Compile Ender3_422_BLT
+        run: platformio run -e Ender3_422_BLT
+
+      - name: Collect firmware
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p artifact
+          BIN="$(find .pio/build/Ender3_422_BLT -maxdepth 1 -type f -name '*.bin' | head -n 1)"
+          test -n "$BIN"
+          cp "$BIN" artifact/Ender3Pro_422_TinyMachines_FLASH_EEPROM_BLT_BIQU_B3950_E415_Z235.bin
+          cp Marlin/Configuration.h artifact/Configuration.h
+          cp Marlin/Configuration_adv.h artifact/Configuration_adv.h
+          sha256sum artifact/*.bin | tee artifact/SHA256.txt
+          ls -lah artifact
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ender3Pro_422_TinyMachines_FLASH_EEPROM
+          path: artifact/*
+          if-no-files-found: error
+          retention-days: 30
