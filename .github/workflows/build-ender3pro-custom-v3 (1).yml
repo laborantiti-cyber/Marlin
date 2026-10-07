@@ -1,0 +1,124 @@
+name: Build Ender3 Pro 4.2.2 Custom Firmware
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout TinyMachines / InsanityAutomation source
+        uses: actions/checkout@v4
+        with:
+          repository: InsanityAutomation/Marlin
+          ref: CrealityDwin_2.0
+          fetch-depth: 1
+
+      - name: Apply custom configuration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path("Marlin/Configuration.h")
+          s = p.read_text(encoding="utf-8")
+
+          def replace_once(old, new, label):
+              global s
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {n}")
+              s = s.replace(old, new, 1)
+              print(f"OK: {label}")
+
+          # Trianglelab / BMG style extruder: TinyMachines defines 415 steps/mm
+          replace_once(
+              " //#define BondtechBMG",
+              " #define BondtechBMG",
+              "E steps = 415"
+          )
+
+          # BIQU HT-NTC100K 100K B3950 350C -> Marlin thermistor table 61
+          replace_once(
+              "#elif ENABLED(HotendStock)\n  #define TEMP_SENSOR_0 1\n#endif",
+              "#elif ENABLED(HotendStock)\n  #define TEMP_SENSOR_0 61\n#endif",
+              "TEMP_SENSOR_0 = 61"
+          )
+
+          # Measured BLTouch position on the custom printhead
+          replace_once(
+              "#define NOZZLE_TO_PROBE_OFFSET { -41, -8, 0 }",
+              "#define NOZZLE_TO_PROBE_OFFSET { -29, -27, -8.90 }",
+              "BLTouch offsets X-29 Y-27 Z-8.90"
+          )
+
+          # Allow fine Z-offset adjustment beyond the stock -9 mm limit
+          replace_once(
+              "#define Z_PROBE_OFFSET_RANGE_MIN -9",
+              "#define Z_PROBE_OFFSET_RANGE_MIN -15",
+              "Z probe offset minimum = -15"
+          )
+
+          # Physical marked bed-center point for safe Z homing
+          replace_once(
+              "#define Z_SAFE_HOMING_X_POINT (X_BED_SIZE / 2)  // X point for Z homing",
+              "#define Z_SAFE_HOMING_X_POINT 110  // measured physical bed center (probe)",
+              "Safe home X = 110"
+          )
+          replace_once(
+              "#define Z_SAFE_HOMING_Y_POINT (Y_BED_SIZE / 2)  // Y point for Z homing",
+              "#define Z_SAFE_HOMING_Y_POINT 129  // measured physical bed center (probe)",
+              "Safe home Y = 129"
+          )
+
+          # Ender 3 / Ender 3 Pro max Z = 235 mm
+          replace_once(
+              "  #elif ANY(MachineEnder3, MachineEnder3V2)\n    #define X_BED_SIZE 230\n    #define Y_BED_SIZE 230\n    #define Z_MAX_POS 250",
+              "  #elif ANY(MachineEnder3, MachineEnder3V2)\n    #define X_BED_SIZE 230\n    #define Y_BED_SIZE 230\n    #define Z_MAX_POS 235",
+              "Z max = 235"
+          )
+
+          p.write_text(s, encoding="utf-8")
+
+          required = {
+              "E415": "#define BondtechBMG",
+              "Thermistor 61": "#define TEMP_SENSOR_0 61",
+              "BLTouch offsets": "#define NOZZLE_TO_PROBE_OFFSET { -29, -27, -8.90 }",
+              "Z range": "#define Z_PROBE_OFFSET_RANGE_MIN -15",
+              "Safe home X": "#define Z_SAFE_HOMING_X_POINT 110",
+              "Safe home Y": "#define Z_SAFE_HOMING_Y_POINT 129",
+              "Z max": "#define Z_MAX_POS 235",
+          }
+          for name, value in required.items():
+              if value not in s:
+                  raise SystemExit(f"Validation failed: {name}")
+          print("All requested settings verified.")
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Compile Ender3_422_BLT
+        run: platformio run -e Ender3_422_BLT
+
+      - name: Collect firmware
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p artifact
+          find .pio/build/Ender3_422_BLT -maxdepth 1 -type f -name "*.bin" -print
+          cp .pio/build/Ender3_422_BLT/*.bin artifact/
+          cp Marlin/Configuration.h artifact/Configuration.h
+          ls -lah artifact
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ender3Pro_422_BLT_BIQU_B3950_E415_Z235
+          path: artifact/*
+          if-no-files-found: error
